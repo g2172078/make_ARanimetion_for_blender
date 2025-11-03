@@ -66,18 +66,39 @@ bone_front_top.parent = bone_front_bottom  # bone_front_bottomの子にする
 # 包装紙の左端の位置を計算（45度回転を考慮）
 paper_left_edge = -paper_size/2 + paper_offset_x
 
+# 左側の包装紙の距離を3分割して、段階的な織り込みを表現
+left_distance = abs(paper_left_edge + half_width)
+left_middle_point = -half_width - (left_distance / 2)  # 中間地点（45度の位置）
+
+# 1. 基本の左側ボーン（商品の角から中間地点まで）
 bone_left_side = armature.data.edit_bones.new("FoldBone_Left_Side")
 bone_left_side.head = (-half_width, -half_depth, 0)  # ボーンの根本：商品の手前左下の角（底面）
-bone_left_side.tail = (paper_left_edge, -half_depth, 0)  # ボーンの先端：左側の包装紙の端
+bone_left_side.tail = (left_middle_point, -half_depth, 0)  # ボーンの先端：中間地点
+
+# 2. 中間ボーン（45度の位置、内側に織り込む動作用）
+bone_left_middle = armature.data.edit_bones.new("FoldBone_Left_Middle")
+bone_left_middle.head = (left_middle_point, -half_depth, 0)  # ボーンの根本：中間地点
+bone_left_middle.tail = (paper_left_edge, -half_depth, 0)  # ボーンの先端：左側の包装紙の端
+bone_left_middle.parent = bone_left_side  # bone_left_sideの子にする
 
 # === 手前側面の三角形織り込み用ボーン ===
 # 左側の包装紙が垂直に立ち上がった時、手前側面に飛び出る三角形部分を内側（谷折り）に折り込むためのボーン
-# 谷折りで内側に押し込むため、ボーンは垂直（Z軸方向）に伸ばす
+# 浮いている包装紙を折り曲げるため、ボーンは左方向（X軸負方向）に伸ばす
+# 商品の高さの半分の位置に配置
 bone_left_front_triangle = armature.data.edit_bones.new("FoldBone_Left_Front_Triangle")
-bone_left_front_triangle.head = (-half_width, -half_depth, 0)  # ボーンの根本：商品の手前左下の角（底面）
-# 垂直に上方向に伸ばす（立ち上がった後の高さまで）
-bone_left_front_triangle.tail = (-half_width, -half_depth, box_height)  # 商品の手前左上の角（上面）
+bone_left_front_triangle.head = (-half_width, -half_depth, box_height / 2)  # ボーンの根本：商品の高さの半分
+# 左方向（X軸負方向）に伸ばす
+triangle_extent = left_distance / 2  # 三角形の範囲
+bone_left_front_triangle.tail = (-half_width - triangle_extent, -half_depth, box_height / 2)  # 左方向に伸ばす（高さの半分）
 bone_left_front_triangle.parent = bone_left_side  # bone_left_sideの子にする
+
+# === 左側の包装紙を上面に折り返すボーン ===
+# 左側の包装紙を垂直に立ち上げた後、商品の上面に向かって折り返すためのボーン
+bone_left_top = armature.data.edit_bones.new("FoldBone_Left_Top")
+bone_left_top.head = (-half_width, -half_depth, box_height)  # ボーンの根本：商品の手前左上の角（上面）
+# 商品の上面に沿って右方向（X軸正方向）に伸ばす
+bone_left_top.tail = (0, -half_depth, box_height)  # 商品の上面の中心まで
+bone_left_top.parent = bone_left_side  # bone_left_sideの子にする
 
 bpy.ops.object.mode_set(mode='OBJECT')
 
@@ -90,7 +111,9 @@ bpy.context.view_layer.objects.active = paper
 vertex_group_front_bottom = paper.vertex_groups.new(name="FoldBone_Front_Bottom")
 vertex_group_front_top = paper.vertex_groups.new(name="FoldBone_Front_Top")
 vertex_group_left_side = paper.vertex_groups.new(name="FoldBone_Left_Side")
+vertex_group_left_middle = paper.vertex_groups.new(name="FoldBone_Left_Middle")
 vertex_group_left_front_triangle = paper.vertex_groups.new(name="FoldBone_Left_Front_Triangle")
+vertex_group_left_top = paper.vertex_groups.new(name="FoldBone_Left_Top")
 
 # 包装紙の頂点にウェイトを設定
 for v in paper.data.vertices:
@@ -105,11 +128,14 @@ for v in paper.data.vertices:
         vertex_group_front_bottom.add([v.index], 0.0, 'REPLACE')
         vertex_group_front_top.add([v.index], 0.0, 'REPLACE')
         vertex_group_left_side.add([v.index], 0.0, 'REPLACE')
+        vertex_group_left_middle.add([v.index], 0.0, 'REPLACE')
         vertex_group_left_front_triangle.add([v.index], 0.0, 'REPLACE')
+        vertex_group_left_top.add([v.index], 0.0, 'REPLACE')
         continue
 
     # === 手前の面：折り目より手前側（Y < -half_depth）の頂点にウェイトを設定 ===
-    if world_co.y < -half_depth:
+    # ただし、左側の領域（X < -half_width）は除外（左側の包装紙として別途処理）
+    if world_co.y < -half_depth and world_co.x >= -half_width:
         # 底面の折り目からの距離
         distance_from_bottom = abs(world_co.y + half_depth)
 
@@ -131,7 +157,9 @@ for v in paper.data.vertices:
 
             # 手前の包装紙は左側ボーンの影響を受けない（曲がりを防ぐ）
             vertex_group_left_side.add([v.index], 0.0, 'REPLACE')
+            vertex_group_left_middle.add([v.index], 0.0, 'REPLACE')
             vertex_group_left_front_triangle.add([v.index], 0.0, 'REPLACE')
+            vertex_group_left_top.add([v.index], 0.0, 'REPLACE')
         else:
             # 底面から上面までの部分：FoldBone_Front_Bottom のみ
             weight = min(1.0, distance_from_bottom / 0.5)
@@ -141,7 +169,9 @@ for v in paper.data.vertices:
 
             # 手前の包装紙は左側ボーンの影響を受けない（曲がりを防ぐ）
             vertex_group_left_side.add([v.index], 0.0, 'REPLACE')
+            vertex_group_left_middle.add([v.index], 0.0, 'REPLACE')
             vertex_group_left_front_triangle.add([v.index], 0.0, 'REPLACE')
+            vertex_group_left_top.add([v.index], 0.0, 'REPLACE')
 
     # === 左側の面：手前の底辺より左側の頂点（包装紙の左下の角の領域） ===
     # 包装紙が45度回転しているので、対角線で判定
@@ -156,23 +186,90 @@ for v in paper.data.vertices:
         # グラデーションウェイト（折り目に近いほど強く）
         base_weight = min(1.0, distance_from_left / 0.5)
 
-        # 左側の包装紙の基本ウェイト（垂直に立ち上げる）
-        vertex_group_left_side.add([v.index], base_weight, 'REPLACE')
+        # 左側の包装紙を2つのボーンで制御（中間地点で分ける）
+        # 商品の角から中間地点まで：Left_Side
+        # 中間地点から包装紙の端まで：Left_Middle
+        distance_ratio = distance_from_left / left_distance if left_distance > 0.01 else 0
+
+        if distance_ratio < 0.5:
+            # 商品に近い側：Left_Sideのみの影響
+            vertex_group_left_side.add([v.index], base_weight, 'REPLACE')
+            vertex_group_left_middle.add([v.index], 0.0, 'REPLACE')
+        else:
+            # 中間地点より外側：両方のボーンの影響を受ける
+            # Left_Sideは常に影響を受ける（親ボーン）
+            vertex_group_left_side.add([v.index], base_weight, 'REPLACE')
+            # Left_Middleは中間地点から先で影響が強くなる
+            middle_influence = (distance_ratio - 0.5) * 2.0  # 0.5〜1.0 を 0.0〜1.0 にマッピング
+            vertex_group_left_middle.add([v.index], middle_influence * base_weight, 'REPLACE')
 
         # 手前側面の三角形織り込み領域の判定
-        # 左側の包装紙が立ち上がった時、手前側面（Y < -half_depth）に飛び出る三角形部分
-        # この部分は織り込みボーンの影響を受ける
-        # 三角形の領域：商品の手前左角を中心に、左と手前に広がる領域
-        # 対角線より手前側（X + Y が負の大きな値）が三角形領域
-        diagonal_distance = (world_co.x + half_width) + (world_co.y + half_depth)
+        # FoldBone_Left_Front_Triangleが接している包装紙の部分のみを動かす
+        #
+        # 重要：FoldBone_Left_Front_Triangleはbone_left_sideの子ボーン
+        # bone_left_sideが90度回転した後に、FoldBone_Left_Front_Triangleと接触する包装紙を判定
+        #
+        # bone_left_sideの回転：
+        # - 回転軸：(-half_width, -half_depth, 0) から X軸負方向に伸びる（Z軸は0のまま）
+        # - 回転：X軸で90度回転（平面上の包装紙を垂直に立ち上げる）
+        #
+        # 立ち上がり前後の座標変換：
+        # - 回転軸はY=-half_depthの位置
+        # - 平面上でY=-half_depthからY軸正方向（奥）に距離dだけ離れた点は、
+        #   立ち上がった後、Y=-half_depthの位置でZ=dの高さに移動する
+        #
+        # FoldBone_Left_Front_Triangleの位置：
+        # - 立ち上がった後：(-half_width, -half_depth, box_height/2) から左方向に伸びる
+        # - したがって、ボーンと接触する包装紙は、
+        #   平面上でY=-half_depthからY軸正方向にbox_height/2離れた位置の包装紙
+        #
+        # 判定条件（平面上の座標）：
+        # - X座標：-half_widthより左側（X < -half_width）
+        # - Y座標：-half_depth から -half_depth + box_height/2 の範囲
 
-        # 対角線より手前側で、かつ距離が近い部分が三角形織り込みの影響を受ける
-        if diagonal_distance < 0 and distance_from_front < abs(paper_left_edge + half_width):
-            # 三角形の影響の強さ（対角線からの距離と手前からの距離に応じて）
-            triangle_influence = min(1.0, abs(diagonal_distance) / 1.0)
-            vertex_group_left_front_triangle.add([v.index], triangle_influence * base_weight, 'REPLACE')
+        # Y座標の判定：回転軸から手前方向（-Y方向）にbox_height/2の範囲
+        # bone_left_sideの回転軸はX軸負方向に伸びる（Y=-half_depth, Z=0の位置）
+        # X軸まわりに90度回転すると：
+        #   - Y軸正方向（奥）にある点 → Z軸負方向（下）に移動
+        #   - Z軸正方向（上）にある点 → Y軸正方向（奥）に移動
+        #
+        # したがって、立ち上がった後にZ=box_height/2の高さにある点は、
+        # 立ち上がる前（平面上）でY=-half_depth - box_height/2の位置にあった
+        #
+        # つまり、回転軸から-Y方向（手前方向）にbox_height/2離れた位置
+
+        y_bone_contact_center = -half_depth - box_height / 2  # ボーンの中心位置（立ち上がり前、手前方向）
+        y_tolerance = 0.5  # 影響範囲の許容値
+
+        # ボーンが接触する包装紙のY座標範囲
+        y_min = y_bone_contact_center - y_tolerance
+        y_max = y_bone_contact_center + y_tolerance
+        is_at_bone_contact_y = (y_min <= world_co.y <= y_max)
+
+        # ボーンが接している包装紙の判定
+        if is_at_bone_contact_y:
+            # Y方向の位置に応じた影響の強さ
+            # ボーンの中心位置に近いほど強い影響
+            y_distance_from_center = abs(world_co.y - y_bone_contact_center)
+            y_influence = 1.0 - (y_distance_from_center / y_tolerance)
+            y_influence = max(0.0, min(1.0, y_influence))
+
+            # X方向の影響（商品の左辺から左に行くほど弱くなる）
+            x_influence = 1.0
+            if distance_from_left > 0:
+                # 左に行くほど影響が弱くなる（box_heightの範囲で減衰）
+                x_influence = max(0.0, 1.0 - distance_from_left / box_height)
+
+            # 接触強度
+            contact_strength = y_influence * x_influence
+            vertex_group_left_front_triangle.add([v.index], contact_strength, 'REPLACE')
         else:
             vertex_group_left_front_triangle.add([v.index], 0.0, 'REPLACE')
+
+        # 上面に折り返す部分のウェイト（商品の上面の高さより上の部分）
+        # 立ち上がった後、上面に向かって折り返す
+        # 左側の包装紙全体が上面折り返しの影響を受ける
+        vertex_group_left_top.add([v.index], base_weight, 'REPLACE')
 
         # 手前のボーンの影響は受けない
         vertex_group_front_bottom.add([v.index], 0.0, 'REPLACE')
@@ -184,7 +281,9 @@ for v in paper.data.vertices:
         vertex_group_front_bottom.add([v.index], 0.0, 'REPLACE')
         vertex_group_front_top.add([v.index], 0.0, 'REPLACE')
         vertex_group_left_side.add([v.index], 0.0, 'REPLACE')
+        vertex_group_left_middle.add([v.index], 0.0, 'REPLACE')
         vertex_group_left_front_triangle.add([v.index], 0.0, 'REPLACE')
+        vertex_group_left_top.add([v.index], 0.0, 'REPLACE')
 
 # 3. 包装紙をアーマチュアの子にする（Armature Deform with Empty Groups）
 paper.select_set(True)
@@ -203,7 +302,7 @@ for modifier in paper.modifiers:
 
 # アニメーションのフレーム範囲を設定
 bpy.context.scene.frame_start = 1
-bpy.context.scene.frame_end = 150
+bpy.context.scene.frame_end = 190
 
 # アーマチュアを選択してポーズモードに切り替え
 bpy.ops.object.select_all(action='DESELECT')
@@ -215,31 +314,43 @@ bpy.ops.object.mode_set(mode='POSE')
 pbone_front_bottom = armature.pose.bones["FoldBone_Front_Bottom"]
 pbone_front_top = armature.pose.bones["FoldBone_Front_Top"]
 pbone_left_side = armature.pose.bones["FoldBone_Left_Side"]
+pbone_left_middle = armature.pose.bones["FoldBone_Left_Middle"]
 pbone_left_front_triangle = armature.pose.bones["FoldBone_Left_Front_Triangle"]
+pbone_left_top = armature.pose.bones["FoldBone_Left_Top"]
 
 pbone_front_bottom.rotation_mode = 'XYZ'
 pbone_front_top.rotation_mode = 'XYZ'
 pbone_left_side.rotation_mode = 'XYZ'
+pbone_left_middle.rotation_mode = 'XYZ'
 pbone_left_front_triangle.rotation_mode = 'XYZ'
+pbone_left_top.rotation_mode = 'XYZ'
 
 # フレーム1: 初期位置（平らな状態）
 bpy.context.scene.frame_set(1)
 pbone_front_bottom.rotation_euler = (0, 0, 0)
 pbone_front_top.rotation_euler = (0, 0, 0)
 pbone_left_side.rotation_euler = (0, 0, 0)
+pbone_left_middle.rotation_euler = (0, 0, 0)
 pbone_left_front_triangle.rotation_euler = (0, 0, 0)
+pbone_left_top.rotation_euler = (0, 0, 0)
 pbone_front_bottom.keyframe_insert(data_path="rotation_euler", frame=1)
 pbone_front_top.keyframe_insert(data_path="rotation_euler", frame=1)
 pbone_left_side.keyframe_insert(data_path="rotation_euler", frame=1)
+pbone_left_middle.keyframe_insert(data_path="rotation_euler", frame=1)
 pbone_left_front_triangle.keyframe_insert(data_path="rotation_euler", frame=1)
+pbone_left_top.keyframe_insert(data_path="rotation_euler", frame=1)
 
 # === 工程1：手前の紙を立ち上げて上面にかぶせる（フレーム1-90） ===
 # 左側のボーンは最初は動かない
 bpy.context.scene.frame_set(90)
 pbone_left_side.rotation_euler = (0, 0, 0)
+pbone_left_middle.rotation_euler = (0, 0, 0)
 pbone_left_front_triangle.rotation_euler = (0, 0, 0)
+pbone_left_top.rotation_euler = (0, 0, 0)
 pbone_left_side.keyframe_insert(data_path="rotation_euler", frame=90)
+pbone_left_middle.keyframe_insert(data_path="rotation_euler", frame=90)
 pbone_left_front_triangle.keyframe_insert(data_path="rotation_euler", frame=90)
+pbone_left_top.keyframe_insert(data_path="rotation_euler", frame=90)
 
 # フレーム60: 第1段階 - 90度上空に立ち上げる（商品の手前の面に沿って垂直にする）
 bpy.context.scene.frame_set(60)
@@ -259,29 +370,67 @@ pbone_front_top.rotation_euler[2] = 0  # Z軸回転なし
 pbone_front_bottom.keyframe_insert(data_path="rotation_euler", frame=90)
 pbone_front_top.keyframe_insert(data_path="rotation_euler", frame=90)
 
-# === 工程2：左側の紙を内側に織り込みながら（谷折り）垂直に立ち上げる（フレーム90-150） ===
-# フレーム100: 三角形の織り込み開始（立ち上げより先に内側に押し込み始める）
-bpy.context.scene.frame_set(100)
-pbone_left_side.rotation_euler[0] = math.radians(30)  # 少しだけ立ち上げ開始
-# 谷折りで内側（奥方向 = Y軸正方向）に押し込む
-pbone_left_front_triangle.rotation_euler[1] = math.radians(45)  # Y軸で45度回転（内側に押し込み開始）
-pbone_left_side.keyframe_insert(data_path="rotation_euler", frame=100)
-pbone_left_front_triangle.keyframe_insert(data_path="rotation_euler", frame=100)
+# === 工程2：左側の紙を商品の左側面に沿わせて折ってから立ち上げる ===
+# ステップ1: まず三角形を内側に織り込む（平らな状態で商品の左側面に沿わせる）
+# [00:40 - 00:44] 三角形の織り込み開始
+bpy.context.scene.frame_set(115)
+pbone_left_side.rotation_euler[0] = math.radians(0)  # まだ立ち上げない（平らなまま）
+pbone_left_middle.rotation_euler[0] = math.radians(0)  # まだ立ち上げない
+# 浮いている包装紙を上方向（Z軸で回転）に折り曲げ開始
+pbone_left_front_triangle.rotation_euler[2] = math.radians(45)  # Z軸で45度回転（上方向に折り曲げ開始）
+pbone_left_top.rotation_euler = (0, 0, 0)  # まだ折り返さない
+pbone_left_side.keyframe_insert(data_path="rotation_euler", frame=115)
+pbone_left_middle.keyframe_insert(data_path="rotation_euler", frame=115)
+pbone_left_front_triangle.keyframe_insert(data_path="rotation_euler", frame=115)
+pbone_left_top.keyframe_insert(data_path="rotation_euler", frame=115)
 
-# フレーム125: 織り込みと立ち上げを同時進行
-bpy.context.scene.frame_set(125)
-pbone_left_side.rotation_euler[0] = math.radians(60)  # 立ち上げ途中
-pbone_left_front_triangle.rotation_euler[1] = math.radians(70)  # さらに内側に押し込む
-pbone_left_side.keyframe_insert(data_path="rotation_euler", frame=125)
-pbone_left_front_triangle.keyframe_insert(data_path="rotation_euler", frame=125)
+# フレーム130: 三角形の織り込み完了（平らな状態で商品の左側面に沿う）
+bpy.context.scene.frame_set(130)
+pbone_left_side.rotation_euler[0] = math.radians(0)  # まだ立ち上げない
+pbone_left_middle.rotation_euler[0] = math.radians(0)  # まだ立ち上げない
+# 浮いている包装紙を完全に上方向に折り曲げる
+pbone_left_front_triangle.rotation_euler[2] = math.radians(90)  # Z軸で90度回転（完全に上方向に折り曲げる）
+pbone_left_top.rotation_euler = (0, 0, 0)  # まだ折り返さない
+pbone_left_side.keyframe_insert(data_path="rotation_euler", frame=130)
+pbone_left_middle.keyframe_insert(data_path="rotation_euler", frame=130)
+pbone_left_front_triangle.keyframe_insert(data_path="rotation_euler", frame=130)
+pbone_left_top.keyframe_insert(data_path="rotation_euler", frame=130)
 
-# フレーム150: 左側完全に垂直、三角形完全に織り込み完了
+# ステップ2: 左側面に沿わせた状態で垂直に立ち上げる
+# [00:45 - 00:51] 立ち上げ開始
 bpy.context.scene.frame_set(150)
-pbone_left_side.rotation_euler[0] = math.radians(90)  # X軸で90度回転（完全に垂直）
-# 谷折りで完全に内側（商品の側面に沿う）に押し込む
-pbone_left_front_triangle.rotation_euler[1] = math.radians(90)  # Y軸で90度回転（完全に内側に押し込む）
+pbone_left_side.rotation_euler[0] = math.radians(60)  # 立ち上げ途中
+pbone_left_middle.rotation_euler[0] = math.radians(40)  # 中間部分も立ち上げ
+pbone_left_front_triangle.rotation_euler[2] = math.radians(90)  # Z軸で90度を維持（上方向に折り曲げた状態）
+pbone_left_top.rotation_euler = (0, 0, 0)  # まだ折り返さない
 pbone_left_side.keyframe_insert(data_path="rotation_euler", frame=150)
+pbone_left_middle.keyframe_insert(data_path="rotation_euler", frame=150)
 pbone_left_front_triangle.keyframe_insert(data_path="rotation_euler", frame=150)
+pbone_left_top.keyframe_insert(data_path="rotation_euler", frame=150)
+
+# フレーム165: 完全に垂直に立ち上げ完了
+bpy.context.scene.frame_set(165)
+pbone_left_side.rotation_euler[0] = math.radians(90)  # X軸で90度回転（完全に垂直）
+pbone_left_middle.rotation_euler[0] = math.radians(70)  # 中間部分もさらに立ち上げ（内側への織り込みを表現）
+pbone_left_front_triangle.rotation_euler[2] = math.radians(90)  # Z軸で90度を維持（上方向に折り曲げた状態）
+pbone_left_top.rotation_euler = (0, 0, 0)  # まだ折り返さない
+pbone_left_side.keyframe_insert(data_path="rotation_euler", frame=165)
+pbone_left_middle.keyframe_insert(data_path="rotation_euler", frame=165)
+pbone_left_front_triangle.keyframe_insert(data_path="rotation_euler", frame=165)
+pbone_left_top.keyframe_insert(data_path="rotation_euler", frame=165)
+
+# ステップ3: 商品の上面に折り返す
+# [00:52 - 00:56] 上面に折り返す
+bpy.context.scene.frame_set(190)
+pbone_left_side.rotation_euler[0] = math.radians(90)  # 90度を維持
+pbone_left_middle.rotation_euler[0] = math.radians(90)  # 中間部分も90度まで立ち上げる
+pbone_left_front_triangle.rotation_euler[2] = math.radians(90)  # Z軸で90度を維持（上方向に折り曲げた状態）
+# 上面に向かって折り返す（X軸で-90度回転）
+pbone_left_top.rotation_euler[0] = math.radians(-90)  # X軸で-90度回転（上面に折り返す）
+pbone_left_side.keyframe_insert(data_path="rotation_euler", frame=190)
+pbone_left_middle.keyframe_insert(data_path="rotation_euler", frame=190)
+pbone_left_front_triangle.keyframe_insert(data_path="rotation_euler", frame=190)
+pbone_left_top.keyframe_insert(data_path="rotation_euler", frame=190)
 
 # オブジェクトモードに戻る
 bpy.ops.object.mode_set(mode='OBJECT')
